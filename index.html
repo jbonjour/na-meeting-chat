@@ -432,59 +432,17 @@ function showWelcome() {
   });
 }
 
-// ── Gemini API ─────────────────────────────────────────────────────────────
+// ── Message Parser ─────────────────────────────────────────────────────────
 
-const GEMINI_SYSTEM = `You are a meeting search assistant. Extract search parameters from the user's message and return ONLY a JSON object with these fields (all optional):
-- weekdays: array of numbers 1-7 (1=Sunday, 7=Saturday)
-- location: city name string
-- start_time_min: "HH:MM" 24h format
-- start_time_max: "HH:MM" 24h format
-- venue_types: array of numbers (1=in-person, 2=virtual, 3=hybrid)
-- search_string: any other search terms
-- radius_miles: number if "near me" or distance mentioned
-- use_geolocation: true if user says "near me" or "nearby"
-
-Return ONLY valid JSON, no explanation.`;
-
-async function parseWithGemini(message) {
-  const apiKey = (typeof CONFIG !== 'undefined') ? CONFIG.GEMINI_API_KEY : null;
-  if (!apiKey || apiKey === 'your-gemini-api-key-here') {
-    throw new Error('NO_API_KEY');
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
-  const body = {
-    contents: [{
-      parts: [{ text: GEMINI_SYSTEM + '\n\nUser: ' + message }]
-    }]
-  };
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Gemini API error ${res.status}: ${errText}`);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-  // Strip markdown code fences if present
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
-  return JSON.parse(cleaned);
-}
-
-// ── Fallback parser (no Gemini) ────────────────────────────────────────────
-
-function parseFallback(message) {
+function parseMessage(message) {
   const msg = message.toLowerCase();
   const params = {};
 
-  // Days of week
+  // ── Days of week ──
+  const now = new Date();
+  const todayNum = now.getDay() + 1; // 1=Sun ... 7=Sat
+  const tomorrowNum = (now.getDay() + 1) % 7 + 1;
+
   const dayMap = {
     sunday: 1, sun: 1,
     monday: 2, mon: 2,
@@ -499,6 +457,8 @@ function parseFallback(message) {
   };
 
   const weekdays = new Set();
+  if (/\btoday\b/.test(msg) || /\btonight\b/.test(msg)) weekdays.add(todayNum);
+  if (/\btomorrow\b/.test(msg)) weekdays.add(tomorrowNum);
   for (const [word, val] of Object.entries(dayMap)) {
     if (msg.includes(word)) {
       if (Array.isArray(val)) val.forEach(v => weekdays.add(v));
@@ -507,25 +467,26 @@ function parseFallback(message) {
   }
   if (weekdays.size) params.weekdays = [...weekdays];
 
-  // Virtual / in-person
-  if (msg.includes('virtual') || msg.includes('online') || msg.includes('zoom')) {
+  // ── Venue type ──
+  if (/virtual|online|zoom|video call|remote meeting|phone meeting/.test(msg)) {
     params.venue_types = [2];
-  } else if (msg.includes('in-person') || msg.includes('in person')) {
+  } else if (/\bin.?person\b|face.to.face|in.?person only/.test(msg)) {
     params.venue_types = [1];
-  } else if (msg.includes('hybrid')) {
+  } else if (/hybrid/.test(msg)) {
     params.venue_types = [3];
   }
 
-  // Near me
-  if (msg.includes('near me') || msg.includes('nearby')) {
+  // ── Geolocation ──
+  if (/near me|nearby|closest|around me|my area|my location|close to me/.test(msg)) {
     params.use_geolocation = true;
-    params.radius_miles = 10;
+    const radiusMatch = msg.match(/within\s+(\d+)\s*miles?/);
+    params.radius_miles = radiusMatch ? parseInt(radiusMatch[1], 10) : 10;
   }
 
-  // Time patterns: "after 7", "before 9pm", "at 7:30", "evening", "morning", "afternoon"
-  const afterMatch = msg.match(/after\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  // ── Time parsing ──
+  const afterMatch  = msg.match(/after\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
   const beforeMatch = msg.match(/before\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
-  const atMatch = msg.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  const atMatch     = msg.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
 
   function toHHMM(h, m, ampm) {
     h = parseInt(h, 10);
@@ -536,21 +497,46 @@ function parseFallback(message) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
-  if (afterMatch) params.start_time_min = toHHMM(afterMatch[1], afterMatch[2], afterMatch[3]);
+  if (afterMatch)  params.start_time_min = toHHMM(afterMatch[1],  afterMatch[2],  afterMatch[3]);
   if (beforeMatch) params.start_time_max = toHHMM(beforeMatch[1], beforeMatch[2], beforeMatch[3]);
   if (atMatch && !afterMatch) params.start_time_min = toHHMM(atMatch[1], atMatch[2], atMatch[3]);
 
-  // Time of day keywords
+  // Time-of-day keywords (only when no explicit time given)
   if (!afterMatch && !beforeMatch && !atMatch) {
-    if (msg.includes('morning'))    { params.start_time_min = '06:00'; params.start_time_max = '12:00'; }
-    if (msg.includes('afternoon'))  { params.start_time_min = '12:00'; params.start_time_max = '17:00'; }
-    if (msg.includes('evening'))    { params.start_time_min = '17:00'; params.start_time_max = '23:00'; }
-    if (msg.includes('night'))      { params.start_time_min = '19:00'; params.start_time_max = '23:59'; }
+    if (/\bmorning\b/.test(msg))            { params.start_time_min = '06:00'; params.start_time_max = '12:00'; }
+    else if (/\bnoon\b|\blunch/.test(msg))  { params.start_time_min = '11:30'; params.start_time_max = '13:30'; }
+    else if (/\bafternoon\b/.test(msg))     { params.start_time_min = '12:00'; params.start_time_max = '17:00'; }
+    else if (/\btonight\b|\bevening\b/.test(msg)) { params.start_time_min = '17:00'; params.start_time_max = '23:59'; }
+    else if (/\bnight\b/.test(msg))         { params.start_time_min = '19:00'; params.start_time_max = '23:59'; }
   }
 
-  // City — look for "in <City>" pattern
-  const cityMatch = message.match(/\bin\s+([A-Z][a-zA-Z\s]+?)(?:\s+on|\s+at|\s+after|\s+before|\s+virtual|$)/);
-  if (cityMatch) params.location = cityMatch[1].trim();
+  // ── Meeting format keywords → search_string ──
+  const formatKeywords = [
+    [/step study|step meeting/, 'Step Study'],
+    [/speaker/, 'Speaker'],
+    [/discussion/, 'Discussion'],
+    [/women'?s|women only/, "Women's"],
+    [/men'?s|men only/, "Men's"],
+    [/young people|youth|yp/, 'Young People'],
+    [/wheelchair|accessible/, 'Wheelchair'],
+    [/candlelight/, 'Candlelight'],
+    [/basic text/, 'Basic Text'],
+    [/tradition/, 'Tradition'],
+    [/newcomer|beginner/, 'Newcomer'],
+  ];
+  const searchTerms = [];
+  for (const [re, term] of formatKeywords) {
+    if (re.test(msg)) searchTerms.push(term);
+  }
+  if (searchTerms.length) params.search_string = searchTerms.join(' ');
+
+  // ── City: "in <City>" pattern ──
+  const NOISE = /\b(the|a|an|my|some|any|all|on|at|after|before|around|near|for|with|virtual|online|open|closed|meeting|meetings|na|narcotics|anonymous)\b/gi;
+  const cityMatch = message.match(/\bin\s+([A-Za-z][a-zA-Z\s]{1,30}?)(?=\s+on\b|\s+at\b|\s+after\b|\s+before\b|\s+virtual\b|\s+meeting|\s*$)/);
+  if (cityMatch) {
+    const city = cityMatch[1].replace(NOISE, '').trim();
+    if (city.length > 1) params.location = city;
+  }
 
   return params;
 }
@@ -766,21 +752,8 @@ async function handleSend() {
   addTypingIndicator();
 
   try {
-    // 1. Parse message with Gemini (fallback to keyword parser)
-    let params = {};
-    let usedFallback = false;
-
-    try {
-      params = await parseWithGemini(message);
-    } catch (geminiErr) {
-      if (geminiErr.message === 'NO_API_KEY') {
-        // Silently fall back — no key configured
-      } else {
-        console.warn('Gemini parse failed, using fallback:', geminiErr.message);
-      }
-      params = parseFallback(message);
-      usedFallback = true;
-    }
+    // 1. Parse message
+    const params = parseMessage(message);
 
     // 2. Geolocation if needed
     let geoCoords = null;
@@ -802,12 +775,6 @@ async function handleSend() {
     removeTypingIndicator();
     const html = renderMeetings(meetings, formats, !!geoCoords);
     addBubble('assistant', html);
-
-    if (usedFallback && meetings.length === 0) {
-      addBubble('assistant',
-        `<p>Tip: Add a Gemini API key in <code>config.js</code> for smarter search parsing.</p>`
-      );
-    }
 
   } catch (err) {
     console.error('Search error:', err);
@@ -842,11 +809,8 @@ userInput.addEventListener('input', () => {
 // ── Init ───────────────────────────────────────────────────────────────────
 
 (function init() {
-  // Warn if config.js is missing or key not set
   if (typeof CONFIG === 'undefined') {
-    console.warn('config.js not found. Copy config.example.js to config.js and add your Gemini API key.');
-  } else if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY === 'your-gemini-api-key-here') {
-    console.warn('Gemini API key not set. Natural language parsing will use keyword fallback.');
+    console.warn('config.js not found. Copy config.example.js to config.js.');
   }
   showWelcome();
 })();
