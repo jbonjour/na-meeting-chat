@@ -1,149 +1,855 @@
-# bmlt-mcp-server
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NA Meeting Finder</title>
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for the [Basic Meeting List Toolbox (BMLT)](https://bmlt.app) — the open-source meeting database used by Narcotics Anonymous service bodies worldwide.
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f0f4f8;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
 
-Connect Claude (or any MCP-compatible AI client) to a BMLT root server and query NA meeting data using natural language.
+    /* ── Header ── */
+    header {
+      background: #003366;
+      color: #fff;
+      padding: 0 16px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      z-index: 10;
+    }
 
----
+    .logo {
+      width: 36px;
+      height: 36px;
+      background: #FFB800;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 15px;
+      color: #003366;
+      flex-shrink: 0;
+      letter-spacing: -0.5px;
+    }
 
-## What it does
+    header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
 
-Exposes four tools:
+    header .subtitle {
+      font-size: 11px;
+      color: #a8c4e0;
+      margin-top: 1px;
+    }
 
-| Tool | Description |
-|------|-------------|
-| `bmlt_search_meetings` | Search meetings by day, format, location, name, or geo coordinates |
-| `bmlt_get_meeting_details` | Get full details for a specific meeting by ID |
-| `bmlt_get_formats` | List all meeting format codes and descriptions (O, C, VM, BT, etc.) |
-| `bmlt_get_service_bodies` | List all service bodies (areas/regions) on the root server |
-| `bmlt_get_server_info` | Check root server version and geographic center |
+    /* ── Chat Window ── */
+    #chat-window {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 12px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scroll-behavior: smooth;
+    }
 
-### Example prompts once connected
+    /* ── Bubbles ── */
+    .bubble-row {
+      display: flex;
+      flex-direction: column;
+      max-width: 82%;
+    }
 
-- *"What NA meetings are happening in Portland tonight?"*
-- *"Find open virtual meetings on Tuesday"*
-- *"Show me all meetings within 5 miles of downtown Portland"*
-- *"What does the format code 'BT' mean?"*
-- *"List all service bodies on the WSZF server"*
+    .bubble-row.user {
+      align-self: flex-end;
+      align-items: flex-end;
+    }
 
----
+    .bubble-row.assistant {
+      align-self: flex-start;
+      align-items: flex-start;
+    }
 
-## Defaults
+    .bubble {
+      padding: 10px 14px;
+      border-radius: 18px;
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
 
-Out of the box, the server points to:
+    .bubble-row.user .bubble {
+      background: #003366;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
 
-- **Root server:** `https://bmlt.wszf.org/main_server` (WSZF network)
-- **Default service body:** `26` (Portland Area NA)
+    .bubble-row.assistant .bubble {
+      background: #fff;
+      color: #1a1a1a;
+      border: 1px solid #d8e4f0;
+      border-bottom-left-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
 
-All tools accept a `root_server_url` parameter to point at any BMLT root server, and `service_body_ids` to scope searches to other areas.
+    .bubble-time {
+      font-size: 11px;
+      color: #8a9ab0;
+      margin-top: 4px;
+      padding: 0 4px;
+    }
 
----
+    /* ── Meeting Cards ── */
+    .results-header {
+      font-size: 13px;
+      font-weight: 600;
+      color: #003366;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #FFB800;
+    }
 
-## Installation
+    .meeting-card {
+      background: #f7fafd;
+      border: 1px solid #d8e4f0;
+      border-left: 4px solid #FFB800;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
 
-```bash
-git clone https://github.com/jbonjour/bmlt-mcp-server.git
-cd bmlt-mcp-server
-npm install
-npm run build
-```
+    .meeting-card:last-child { margin-bottom: 0; }
 
----
+    .meeting-name {
+      font-weight: 700;
+      font-size: 14px;
+      color: #003366;
+      margin-bottom: 3px;
+    }
 
-## Usage
+    .meeting-time {
+      font-size: 13px;
+      color: #444;
+      margin-bottom: 3px;
+    }
 
-### With Claude Desktop (stdio — recommended)
+    .meeting-location {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+    .meeting-formats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 5px;
+    }
 
-```json
-{
-  "mcpServers": {
-    "bmlt": {
-      "command": "node",
-      "args": ["/absolute/path/to/bmlt-mcp-server/dist/index.js"]
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #e8f0fa;
+      color: #003366;
+      border: 1px solid #c0d4ee;
+    }
+
+    .tag.virtual { background: #fff3cd; color: #7a5200; border-color: #ffc44d; }
+    .tag.hybrid  { background: #d4edda; color: #155724; border-color: #8fd4a3; }
+    .tag.open    { background: #e2f0e9; color: #1a6635; border-color: #8fd4a3; }
+    .tag.closed  { background: #fde8e8; color: #8b1a1a; border-color: #f5a0a0; }
+
+    .meeting-link {
+      display: inline-block;
+      margin-top: 5px;
+      font-size: 12px;
+      color: #0066cc;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .meeting-link:hover { text-decoration: underline; }
+
+    .meeting-distance {
+      font-size: 11px;
+      color: #888;
+      margin-top: 3px;
+    }
+
+    /* ── Loading Spinner ── */
+    .typing-indicator {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 10px 14px;
+      background: #fff;
+      border: 1px solid #d8e4f0;
+      border-radius: 18px;
+      border-bottom-left-radius: 4px;
+      width: fit-content;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #a0b4cc;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); }
+      30%            { transform: translateY(-5px); }
+    }
+
+    /* ── Input Bar ── */
+    #input-area {
+      flex-shrink: 0;
+      background: #fff;
+      border-top: 1px solid #d8e4f0;
+      padding: 10px 12px;
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    #user-input {
+      flex: 1;
+      border: 1.5px solid #c5d6ea;
+      border-radius: 22px;
+      padding: 9px 16px;
+      font-size: 14px;
+      resize: none;
+      outline: none;
+      max-height: 100px;
+      overflow-y: auto;
+      line-height: 1.4;
+      color: #1a1a1a;
+      background: #f7fafd;
+      transition: border-color 0.15s;
+    }
+
+    #user-input:focus { border-color: #003366; background: #fff; }
+    #user-input::placeholder { color: #9aafca; }
+
+    #send-btn {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: #003366;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    #send-btn:hover  { background: #004a99; }
+    #send-btn:active { transform: scale(0.93); }
+    #send-btn:disabled { background: #9aafca; cursor: not-allowed; }
+
+    #send-btn svg { width: 18px; height: 18px; fill: #fff; }
+
+    /* ── Error Banner ── */
+    .error-bubble {
+      background: #fde8e8;
+      border: 1px solid #f5a0a0;
+      color: #8b1a1a;
+    }
+
+    /* ── Suggestions ── */
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .suggestion-chip {
+      background: #eef4fb;
+      border: 1px solid #c0d4ee;
+      color: #003366;
+      border-radius: 14px;
+      padding: 5px 11px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .suggestion-chip:hover { background: #d8eaf8; }
+
+    /* ── Responsive ── */
+    @media (max-width: 480px) {
+      .bubble-row { max-width: 92%; }
+      header h1   { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">NA</div>
+  <div>
+    <div id="header-title" style="font-size:18px;font-weight:700;letter-spacing:0.3px;">NA Meeting Finder</div>
+    <div style="font-size:11px;color:#a8c4e0;margin-top:1px;">Narcotics Anonymous</div>
+  </div>
+</header>
+
+<div id="chat-window" aria-live="polite" aria-label="Chat messages"></div>
+
+<div id="input-area">
+  <textarea
+    id="user-input"
+    rows="1"
+    placeholder="Ask about NA meetings…"
+    aria-label="Type your meeting search"
+  ></textarea>
+  <button id="send-btn" aria-label="Send message">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Config must load before main script -->
+<script src="config.js"></script>
+<script>
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+const DAYS = ['', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_ABBR = ['', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function formatTime(timeStr) {
+  if (!timeStr) return '';
+  const parts = timeStr.split(':');
+  let h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+function nowTime() {
+  const d = new Date();
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── DOM helpers ────────────────────────────────────────────────────────────
+
+const chatWindow = document.getElementById('chat-window');
+const userInput  = document.getElementById('user-input');
+const sendBtn    = document.getElementById('send-btn');
+
+function scrollToBottom() {
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+function addBubble(role, html, extraClass = '') {
+  const row = document.createElement('div');
+  row.className = `bubble-row ${role}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = `bubble${extraClass ? ' ' + extraClass : ''}`;
+  bubble.innerHTML = html;
+  row.appendChild(bubble);
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'bubble-time';
+  timeEl.textContent = nowTime();
+  row.appendChild(timeEl);
+
+  chatWindow.appendChild(row);
+  scrollToBottom();
+  return bubble;
+}
+
+function addTypingIndicator() {
+  const row = document.createElement('div');
+  row.className = 'bubble-row assistant';
+  row.id = 'typing-row';
+  row.innerHTML = `<div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+  chatWindow.appendChild(row);
+  scrollToBottom();
+}
+
+function removeTypingIndicator() {
+  const el = document.getElementById('typing-row');
+  if (el) el.remove();
+}
+
+// ── Welcome Message ────────────────────────────────────────────────────────
+
+function showWelcome() {
+  const areaName = (typeof CONFIG !== 'undefined' && CONFIG.AREA_NAME) ? CONFIG.AREA_NAME : 'NA';
+  if (typeof CONFIG !== 'undefined' && CONFIG.AREA_NAME) {
+    document.getElementById('header-title').textContent = CONFIG.AREA_NAME + ' Meeting Finder';
+    document.title = CONFIG.AREA_NAME + ' Meeting Finder';
+  }
+  const html = `
+    <p>Hi! I can help you find ${areaName} meetings. Try asking:</p>
+    <div class="suggestions">
+      <span class="suggestion-chip" role="button" tabindex="0">"Friday evening meetings"</span>
+      <span class="suggestion-chip" role="button" tabindex="0">"Virtual meetings after 7pm"</span>
+      <span class="suggestion-chip" role="button" tabindex="0">"Meetings near me"</span>
+      <span class="suggestion-chip" role="button" tabindex="0">"Open meetings on weekends"</span>
+    </div>
+  `;
+  const bubble = addBubble('assistant', html);
+
+  bubble.querySelectorAll('.suggestion-chip').forEach(chip => {
+    const activate = () => {
+      const text = chip.textContent.replace(/^"|"$/g, '');
+      userInput.value = text;
+      handleSend();
+    };
+    chip.addEventListener('click', activate);
+    chip.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') activate(); });
+  });
+}
+
+// ── Gemini API ─────────────────────────────────────────────────────────────
+
+const GEMINI_SYSTEM = `You are a meeting search assistant. Extract search parameters from the user's message and return ONLY a JSON object with these fields (all optional):
+- weekdays: array of numbers 1-7 (1=Sunday, 7=Saturday)
+- location: city name string
+- start_time_min: "HH:MM" 24h format
+- start_time_max: "HH:MM" 24h format
+- venue_types: array of numbers (1=in-person, 2=virtual, 3=hybrid)
+- search_string: any other search terms
+- radius_miles: number if "near me" or distance mentioned
+- use_geolocation: true if user says "near me" or "nearby"
+
+Return ONLY valid JSON, no explanation.`;
+
+async function parseWithGemini(message) {
+  const apiKey = (typeof CONFIG !== 'undefined') ? CONFIG.GEMINI_API_KEY : null;
+  if (!apiKey || apiKey === 'your-gemini-api-key-here') {
+    throw new Error('NO_API_KEY');
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
+  const body = {
+    contents: [{
+      parts: [{ text: GEMINI_SYSTEM + '\n\nUser: ' + message }]
+    }]
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini API error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  // Strip markdown code fences if present
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  return JSON.parse(cleaned);
+}
+
+// ── Fallback parser (no Gemini) ────────────────────────────────────────────
+
+function parseFallback(message) {
+  const msg = message.toLowerCase();
+  const params = {};
+
+  // Days of week
+  const dayMap = {
+    sunday: 1, sun: 1,
+    monday: 2, mon: 2,
+    tuesday: 3, tue: 3,
+    wednesday: 4, wed: 4,
+    thursday: 5, thu: 5,
+    friday: 6, fri: 6,
+    saturday: 7, sat: 7,
+    weekend: [1, 7],
+    weekday: [2, 3, 4, 5, 6],
+    weekdays: [2, 3, 4, 5, 6],
+  };
+
+  const weekdays = new Set();
+  for (const [word, val] of Object.entries(dayMap)) {
+    if (msg.includes(word)) {
+      if (Array.isArray(val)) val.forEach(v => weekdays.add(v));
+      else weekdays.add(val);
     }
   }
+  if (weekdays.size) params.weekdays = [...weekdays];
+
+  // Virtual / in-person
+  if (msg.includes('virtual') || msg.includes('online') || msg.includes('zoom')) {
+    params.venue_types = [2];
+  } else if (msg.includes('in-person') || msg.includes('in person')) {
+    params.venue_types = [1];
+  } else if (msg.includes('hybrid')) {
+    params.venue_types = [3];
+  }
+
+  // Near me
+  if (msg.includes('near me') || msg.includes('nearby')) {
+    params.use_geolocation = true;
+    params.radius_miles = 10;
+  }
+
+  // Time patterns: "after 7", "before 9pm", "at 7:30", "evening", "morning", "afternoon"
+  const afterMatch = msg.match(/after\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  const beforeMatch = msg.match(/before\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  const atMatch = msg.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+
+  function toHHMM(h, m, ampm) {
+    h = parseInt(h, 10);
+    m = parseInt(m || 0, 10);
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    if (!ampm && h < 6) h += 12; // assume pm for ambiguous small numbers
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  if (afterMatch) params.start_time_min = toHHMM(afterMatch[1], afterMatch[2], afterMatch[3]);
+  if (beforeMatch) params.start_time_max = toHHMM(beforeMatch[1], beforeMatch[2], beforeMatch[3]);
+  if (atMatch && !afterMatch) params.start_time_min = toHHMM(atMatch[1], atMatch[2], atMatch[3]);
+
+  // Time of day keywords
+  if (!afterMatch && !beforeMatch && !atMatch) {
+    if (msg.includes('morning'))    { params.start_time_min = '06:00'; params.start_time_max = '12:00'; }
+    if (msg.includes('afternoon'))  { params.start_time_min = '12:00'; params.start_time_max = '17:00'; }
+    if (msg.includes('evening'))    { params.start_time_min = '17:00'; params.start_time_max = '23:00'; }
+    if (msg.includes('night'))      { params.start_time_min = '19:00'; params.start_time_max = '23:59'; }
+  }
+
+  // City — look for "in <City>" pattern
+  const cityMatch = message.match(/\bin\s+([A-Z][a-zA-Z\s]+?)(?:\s+on|\s+at|\s+after|\s+before|\s+virtual|$)/);
+  if (cityMatch) params.location = cityMatch[1].trim();
+
+  return params;
 }
-```
 
-Restart Claude Desktop. You'll see the BMLT tools available in your chat.
+// ── Geolocation ────────────────────────────────────────────────────────────
 
-### With Claude Code
+function getGeolocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Geolocation is not supported by your browser.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      err => reject(new Error('Could not get your location: ' + err.message)),
+      { timeout: 10000 }
+    );
+  });
+}
 
-```bash
-claude mcp add bmlt node /absolute/path/to/bmlt-mcp-server/dist/index.js
-```
+// ── BMLT API ───────────────────────────────────────────────────────────────
 
-### HTTP mode (for remote/multi-client use)
+async function searchMeetings(params, geoCoords) {
+  const root = (typeof CONFIG !== 'undefined' && CONFIG.BMLT_ROOT_SERVER)
+    ? CONFIG.BMLT_ROOT_SERVER
+    : 'https://bmlt.wszf.org/main_server';
 
-```bash
-TRANSPORT=http PORT=3000 node dist/index.js
-# Server listens on http://localhost:3000/mcp
-```
+  const serviceBodyId = (typeof CONFIG !== 'undefined' && CONFIG.DEFAULT_SERVICE_BODY_ID != null)
+    ? CONFIG.DEFAULT_SERVICE_BODY_ID
+    : null;
 
----
+  const url = new URL(`${root}/client_interface/json/`);
+  url.searchParams.set('switcher', 'GetSearchResults');
+  url.searchParams.set('lang_enum', 'en');
+  url.searchParams.set('get_used_formats', '1');
 
-## Development
+  if (serviceBodyId && !params.location && !geoCoords) {
+    url.searchParams.set('services[0]', serviceBodyId);
+  }
 
-```bash
-npm install
-npm run build      # compile TypeScript → dist/
-npm start          # run compiled server (stdio)
+  // Weekdays
+  if (params.weekdays && params.weekdays.length > 0) {
+    params.weekdays.forEach((day, i) => url.searchParams.set(`weekdays[${i}]`, day));
+  }
 
-# Or run via HTTP for testing:
-TRANSPORT=http PORT=3000 npm start
-```
+  // Venue types
+  if (params.venue_types && params.venue_types.length > 0) {
+    params.venue_types.forEach((vt, i) => url.searchParams.set(`venue_types[${i}]`, vt));
+  }
 
-To test with the MCP Inspector:
+  // Location (city)
+  if (params.location) {
+    url.searchParams.set('meeting_key', 'location_municipality');
+    url.searchParams.set('meeting_key_value', params.location);
+  }
 
-```bash
-npx @modelcontextprotocol/inspector node dist/index.js
-```
+  // Time filters
+  if (params.start_time_min) {
+    const [h, m] = params.start_time_min.split(':');
+    url.searchParams.set('StartsAfterH', parseInt(h, 10));
+    url.searchParams.set('StartsAfterM', parseInt(m, 10));
+  }
+  if (params.start_time_max) {
+    const [h, m] = params.start_time_max.split(':');
+    url.searchParams.set('StartsBeforeH', parseInt(h, 10));
+    url.searchParams.set('StartsBeforeM', parseInt(m, 10));
+  }
 
----
+  // Geolocation
+  if (geoCoords) {
+    const radiusKm = params.radius_miles
+      ? Math.round(params.radius_miles * 1.60934)
+      : 16; // default ~10 miles
+    url.searchParams.set('lat_val', geoCoords.lat);
+    url.searchParams.set('long_val', geoCoords.lng);
+    url.searchParams.set('geo_width_km', radiusKm);
+    url.searchParams.set('sort_results_by_distance', '1');
+  }
 
-## Environment variables
+  // Extra search string
+  if (params.search_string) {
+    url.searchParams.set('SearchString', params.search_string);
+  }
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
-| `PORT` | `3000` | HTTP port (only used when `TRANSPORT=http`) |
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(`BMLT API error ${res.status}`);
 
----
+  const data = await res.json();
 
-## Changing the default root server or service body
+  // BMLT returns an object with meeting_data and format_data when get_used_formats=1
+  // Or a plain array when formats aren't returned
+  if (Array.isArray(data)) return { meetings: data, formats: {} };
 
-Edit `src/constants.ts`:
+  const meetings = data.meeting_data || data;
+  const rawFormats = data.formats || [];
+  const formats = {};
+  if (Array.isArray(rawFormats)) {
+    rawFormats.forEach(f => { formats[f.key_string] = f.name_string; });
+  }
+  return { meetings: Array.isArray(meetings) ? meetings : [], formats };
+}
 
-```typescript
-export const DEFAULT_ROOT_SERVER = "https://bmlt.wszf.org/main_server";
-export const DEFAULT_SERVICE_BODY_ID = 26; // Portland NA
-```
+// ── Format Meeting Results ─────────────────────────────────────────────────
 
-Then rebuild: `npm run build`
+function buildFormatTags(formatStr, venueType) {
+  const tags = [];
+  const keys = (formatStr || '').split(',').map(s => s.trim()).filter(Boolean);
 
----
+  // Venue type badge
+  if (venueType == 2) tags.push({ label: 'Virtual', cls: 'virtual' });
+  else if (venueType == 3) tags.push({ label: 'Hybrid', cls: 'hybrid' });
 
-## BMLT root servers
+  // Common format codes
+  const notable = {
+    'O':  { label: 'Open',       cls: 'open'   },
+    'C':  { label: 'Closed',     cls: 'closed' },
+    'BT': { label: 'Basic Text'                },
+    'D':  { label: 'Discussion'                },
+    'JT': { label: 'Just for Today'            },
+    'IP': { label: 'Lit Study'                 },
+    'SPD':{ label: 'Speaker'                   },
+    'SP': { label: 'Speaker'                   },
+    'NS': { label: 'No Smoking'                },
+    'WC': { label: 'Wheelchair'                },
+    'W':  { label: "Women's"                   },
+    'M':  { label: "Men's"                     },
+    'YP': { label: 'Young People'              },
+    'CAN':{ label: 'Candlelight'               },
+    'ST': { label: 'Step Study'                },
+    'TR': { label: 'Tradition Study'           },
+  };
 
-Any NA service body running BMLT can be queried. Common root servers:
+  keys.forEach(k => {
+    if (notable[k]) {
+      tags.push({ label: notable[k].label, cls: notable[k].cls || '' });
+    }
+  });
 
-| Network | URL |
-|---------|-----|
-| WSZF (Pacific Northwest) | `https://bmlt.wszf.org/main_server` |
-| NA World Services (aggregator) | `https://na.org/main_server` |
+  return tags;
+}
 
-Find your region's root server at [bmlt.app](https://bmlt.app).
+function renderMeetings(meetings, formats, geoSearch) {
+  if (!meetings || meetings.length === 0) {
+    return `<p>No meetings found. Try broadening your search — remove a filter or search a wider area.</p>`;
+  }
 
----
+  let html = `<div class="results-header">${meetings.length} meeting${meetings.length !== 1 ? 's' : ''} found</div>`;
 
-## Contributing
+  meetings.forEach(m => {
+    const name      = escapeHtml(m.meeting_name || 'Unnamed Meeting');
+    const day       = DAYS[parseInt(m.weekday_tinyint, 10)] || '';
+    const time      = formatTime(m.start_time);
+    const venue     = parseInt(m.venue_type, 10);
 
-PRs welcome. This was built to support Portland Area NA's website modernization project and open-sourced for the broader NA tech community.
+    // Build address
+    const parts = [
+      m.location_text,
+      m.location_street,
+      m.location_municipality,
+      m.location_province,
+    ].map(p => escapeHtml((p || '').trim())).filter(Boolean);
+    const address = parts.join(', ');
 
----
+    const tags = buildFormatTags(m.formats, venue);
 
-## License
+    const virtualLink = m.virtual_meeting_link ? m.virtual_meeting_link.trim() : '';
+    const phoneNum    = m.phone_meeting_number  ? m.phone_meeting_number.trim()  : '';
+    const distMi      = parseFloat(m.distance_in_miles);
 
-MIT — free to use, share, and modify. All work done by and for the NA community.
+    let tagHtml = tags.map(t =>
+      `<span class="tag${t.cls ? ' ' + t.cls : ''}">${escapeHtml(t.label)}</span>`
+    ).join('');
+
+    let linkHtml = '';
+    if (virtualLink) {
+      linkHtml += `<br><a class="meeting-link" href="${escapeHtml(virtualLink)}" target="_blank" rel="noopener">Join online ↗</a>`;
+    }
+    if (phoneNum) {
+      linkHtml += `<br><a class="meeting-link" href="tel:${escapeHtml(phoneNum)}">${escapeHtml(phoneNum)}</a>`;
+    }
+
+    let distHtml = '';
+    if (geoSearch && !isNaN(distMi)) {
+      distHtml = `<div class="meeting-distance">${distMi.toFixed(1)} miles away</div>`;
+    }
+
+    html += `
+      <div class="meeting-card">
+        <div class="meeting-name">${name}</div>
+        <div class="meeting-time">${day} &bull; ${time}</div>
+        ${address ? `<div class="meeting-location">${address}</div>` : ''}
+        ${distHtml}
+        ${tagHtml ? `<div class="meeting-formats">${tagHtml}</div>` : ''}
+        ${linkHtml}
+      </div>
+    `;
+  });
+
+  return html;
+}
+
+// ── Main Send Handler ──────────────────────────────────────────────────────
+
+async function handleSend() {
+  const message = userInput.value.trim();
+  if (!message) return;
+
+  userInput.value = '';
+  userInput.style.height = 'auto';
+  sendBtn.disabled = true;
+
+  addBubble('user', escapeHtml(message));
+  addTypingIndicator();
+
+  try {
+    // 1. Parse message with Gemini (fallback to keyword parser)
+    let params = {};
+    let usedFallback = false;
+
+    try {
+      params = await parseWithGemini(message);
+    } catch (geminiErr) {
+      if (geminiErr.message === 'NO_API_KEY') {
+        // Silently fall back — no key configured
+      } else {
+        console.warn('Gemini parse failed, using fallback:', geminiErr.message);
+      }
+      params = parseFallback(message);
+      usedFallback = true;
+    }
+
+    // 2. Geolocation if needed
+    let geoCoords = null;
+    if (params.use_geolocation) {
+      try {
+        geoCoords = await getGeolocation();
+      } catch (geoErr) {
+        removeTypingIndicator();
+        addBubble('assistant', `<p>Could not get your location. Please enable location access and try again, or search by city name.</p>`, 'error-bubble');
+        sendBtn.disabled = false;
+        return;
+      }
+    }
+
+    // 3. Fetch meetings from BMLT
+    const { meetings, formats } = await searchMeetings(params, geoCoords);
+
+    // 4. Render results
+    removeTypingIndicator();
+    const html = renderMeetings(meetings, formats, !!geoCoords);
+    addBubble('assistant', html);
+
+    if (usedFallback && meetings.length === 0) {
+      addBubble('assistant',
+        `<p>Tip: Add a Gemini API key in <code>config.js</code> for smarter search parsing.</p>`
+      );
+    }
+
+  } catch (err) {
+    console.error('Search error:', err);
+    removeTypingIndicator();
+    addBubble('assistant',
+      `<p>Something went wrong while searching for meetings. Please try again in a moment.</p><p style="font-size:11px;color:#888;margin-top:4px;">${escapeHtml(err.message)}</p>`,
+      'error-bubble'
+    );
+  }
+
+  sendBtn.disabled = false;
+  userInput.focus();
+}
+
+// ── Event Listeners ────────────────────────────────────────────────────────
+
+sendBtn.addEventListener('click', handleSend);
+
+userInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSend();
+  }
+});
+
+// Auto-resize textarea
+userInput.addEventListener('input', () => {
+  userInput.style.height = 'auto';
+  userInput.style.height = Math.min(userInput.scrollHeight, 100) + 'px';
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+(function init() {
+  // Warn if config.js is missing or key not set
+  if (typeof CONFIG === 'undefined') {
+    console.warn('config.js not found. Copy config.example.js to config.js and add your Gemini API key.');
+  } else if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY === 'your-gemini-api-key-here') {
+    console.warn('Gemini API key not set. Natural language parsing will use keyword fallback.');
+  }
+  showWelcome();
+})();
+</script>
+</body>
+</html>
