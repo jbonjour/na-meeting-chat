@@ -25,7 +25,7 @@ jobs:
 
       - name: Write config.js from repository variables
         run: |
-          cat > config.js << 'ENDOFCONFIG'
+          cat > config.js << ENDOFCONFIG
           const CONFIG = {
             AREA_NAME: "${{ vars.AREA_NAME }}",
             BMLT_ROOT_SERVER: "${{ vars.BMLT_ROOT_SERVER }}",
