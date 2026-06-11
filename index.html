@@ -630,7 +630,7 @@ async function searchMeetings(params, geoCoords) {
   // Or a plain array when formats aren't returned
   if (Array.isArray(data)) return { meetings: data, formats: {} };
 
-  const meetings = data.meeting_data || data;
+  const meetings = data.meeting_data || data.meetings || data;
   const rawFormats = data.formats || [];
   const formats = {};
   if (Array.isArray(rawFormats)) {
